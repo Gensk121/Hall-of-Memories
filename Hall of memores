@@ -1,0 +1,338 @@
+package com.aggro
+
+import abyss.plugin.api.*
+import abyss.plugin.api.entities.Npc
+import abyss.plugin.api.query.Queries
+import abyss.plugin.api.query.players.PlayerQuery
+import kotlinx.coroutines.*
+import kotlin.random.Random
+import java.awt.event.KeyEvent
+import kotlin.math.round
+
+class HallofMemories : Plugin() {
+
+    private lateinit var ctx: PluginContext
+    private var isRunning = false
+    private val MEMORY_JAR = "Memory jar"
+    private val MEMORY_JAR_FULL = "Memory jar (full)"
+    private val DEPOT_ID = 111374
+    private val RIFT_ID = 111375
+    private val KFRAG_NAME = "Knowledge fragment"
+    private var checkForAgentsEnabled = true
+    private var selectedMemory: Npc? = null
+    private var memories = arrayOf("Lustrous memories", "Brilliant memories", "Radiant memories", "Luminous memories", "Incandescent memories")
+    private var chosenMemoryIndex = 0
+    private var chosenMemory = ""
+    private var keepCurrentMethod = false
+    private val scope = CoroutineScope(Dispatchers.Default)
+    private val scope2 = CoroutineScope(Dispatchers.Default)
+    private var xpPerHour = 0.0
+    private var penguins = 0
+    private var attempts = 0
+    private var xpEarned = 0
+    private var isScopeCreated = false
+    private var isAntiAfkRunning = false
+
+    override fun onLoaded(pluginContext: PluginContext): Boolean {
+        ctx = pluginContext
+        pluginContext.name = "Hall of Memories"
+        pluginContext.category = "Aggro"
+        keepCurrentMethod = true
+        isRunning = true
+        load(pluginContext)
+        return true
+    }
+
+    override fun onLoop(): Int {
+        try {
+            if (isRunning) {
+                if (!isScopeCreated){
+                    startXpTracker(scope)
+                    antiAFK(scope2)
+                    isScopeCreated = true
+                }
+                    chosenMemory = middleNPCs()  //checks to see if memory bud is open, in the middle
+                    ?: if (!keepCurrentMethod) {
+                        memories[chosenMemoryIndex]
+                    } else {
+                        val divinationLevel = Client.getStatById(Client.DIVINATION).currentLevel
+                        when {
+                            divinationLevel in 70..79 -> "Lustrous memories"
+                            divinationLevel in 80..84 -> "Brilliant memories"
+                            divinationLevel in 85..89 -> "Radiant memories"
+                            divinationLevel in 90..94 -> "Luminous memories"
+                            divinationLevel >= 95 -> "Incandescent memories"
+                            else -> ""
+                        }
+                    }
+                val fullJarCheck = Backpack.contains { i: ComponentItem ->
+                    i.name.contains(MEMORY_JAR) && !i.name.contains(MEMORY_JAR_FULL)
+                }
+                when {
+                    checkForAgents() != null -> spyOnAgent() //checks to see if agent is present
+                    checkKnowledgeFragment() -> captureKnowledgeFragment()  //checks to see if knowledge fragment is present
+                    Backpack.isFull() && fullJarCheck -> {  //checks to see if backpack is not full and if there is a memory jar that is not full
+                        fillJars(); startTwoTicking()   //fills jars
+                    }
+                    Backpack.isFull() -> depositJars()  //checks to see if backpack is full and deposits jars
+                    else -> grabJars()
+                }
+
+            }
+
+        } catch (e: Exception) {
+            Debug.log(e.message)
+        }
+        return 0
+    }
+
+    override fun onPaint() { //UI code
+        try {
+            if(ImGui.button("Start")) {
+                if (!isRunning) {
+                    if (!isAntiAfkRunning) {
+                        antiAFK(scope2)
+                    }
+                    isRunning = true
+                    isAntiAfkRunning = true
+                }
+            }
+            ImGui.sameLine()
+            if(ImGui.button("Stop")) {
+                if (isRunning) {
+                    isAntiAfkRunning = false
+                    isRunning = false
+                }
+            }
+            keepCurrentMethod = ImGui.checkbox("Progressive mode", keepCurrentMethod)
+            chosenMemoryIndex = ImGui.combo("Select Memory", memories, chosenMemoryIndex)
+            ImGui.label("Status: ${if(isRunning) "Active" else "Stopped"}")
+            ImGui.label("Targeted memory: $chosenMemory")
+            ImGui.label("XP/hour: ${round(xpPerHour).toInt()}")
+            ImGui.label("Total xp: ${(xpEarned)}")
+            ImGui.label("Penguins found: $penguins")
+        }catch (e: Exception) {
+            Debug.log(e.message)
+        }
+    }
+
+    private fun startXpTracker(scope: CoroutineScope) = scope.launch { //sets up xp tracker
+        while (isActive) {
+            val player = PlayerQuery.self()
+            if (player == null) {
+                Time.waitFor(Rng.i64(500, 1525)) //To stop silly xp numbers being given
+                continue
+            }
+            Time.waitFor(Rng.i64(1500, 1700))
+            val initialXp = Client.getStatById(Client.DIVINATION).xp
+            val startTime = System.currentTimeMillis()
+            while (isActive) {
+                val currentXp = Client.getStatById(Client.DIVINATION).xp
+                xpEarned = (currentXp - initialXp)
+                val elapsedTime = (System.currentTimeMillis() - startTime) / 1000.0 // convert milliseconds to seconds
+                val hours = elapsedTime / 3600.0
+                xpPerHour = xpEarned / hours
+                delay(2000) // delay for 1 seconds
+            }
+        }
+    }
+
+     private fun antiAFK(scope2: CoroutineScope) = try { scope2.launch {
+         isAntiAfkRunning = true
+         while (isAntiAfkRunning) {
+            val delayTime = Random.nextLong(5, 300) * 1000 // random delay between 5s and 300s
+            delay(delayTime)
+            val keyCode = when (Random.nextInt(4)) {
+                0 -> KeyEvent.VK_UP
+                1 -> KeyEvent.VK_DOWN
+                2 -> KeyEvent.VK_LEFT
+                else -> KeyEvent.VK_RIGHT
+            }
+            Input.pressKey(keyCode)
+            delay(Random.nextLong(100, 827)) // random delay between 100 and 500 milliseconds
+            Input.releaseKey(keyCode)
+            Debug.log("Anti-afk being used")
+        }
+    }
+    } catch (e: Exception) {
+        scope2.cancel()
+    }
+
+    private fun grabJars(): Int { // grab jars from depot when inventory has space
+        try {
+        val player = PlayerQuery.self()
+        val depot = Queries.newObjectQuery()
+            .id(DEPOT_ID)
+            .options("Take-from")
+            .result()
+            .firstOrNull()
+        if(checkForAgents() != null){
+            spyOnAgent()
+        }
+        if(player != null) {
+            if (depot != null && !PlayerQuery.self().isMoving) {
+                depot.interact("Take-from") //take jars from depot
+                Time.waitUntil { !PlayerQuery.self().isMoving && !PlayerQuery.self().isAnimationPlaying }
+            }
+        }
+        return 0
+    }catch (e: Exception) {
+            Debug.log(e.message)
+        }
+        return 0
+    }
+
+    private fun findSelectedMemory(): Npc? { //finds the memory that is selected in the combo box or progressive mode
+        return Queries.newNpcQuery()
+            .names(chosenMemory)
+            .result()
+            .nearest()
+            .orElse(null)
+    }
+
+    private fun fillJars(): Int {   //fills jars with memories
+        try {
+            val player = PlayerQuery.self()
+            selectedMemory = findSelectedMemory()
+            if(player != null) {
+                if (!PlayerQuery.self().isMoving) {
+                    Time.waitFor(Rng.i64(500, 1225))
+                    selectedMemory?.interact("Harvest")
+                    Time.waitFor(Rng.i64(2500, 3000))
+                    Time.waitUntil { !PlayerQuery.self().isMoving }
+                }
+            }
+        } catch (e: Exception) {
+            Debug.log(e.message)
+        }
+        return 0
+    }
+
+    private fun startTwoTicking() { //Two-ticks chosen memories
+        try {
+            while (PlayerQuery.self().isAnimationPlaying && isRunning) {
+                if(checkForAgents() != null){
+                    spyOnAgent()
+                }
+                else if (checkKnowledgeFragment()){
+                captureKnowledgeFragment()
+                }
+                else {
+                    selectedMemory?.interact("Harvest")
+                    Time.waitFor(Rng.i64(1274, 1301))
+                }
+            }
+        } catch (e: Exception) {
+            Debug.log(e.message)
+        }
+    }
+
+    private fun depositJars() { //deposits jars into the rift
+        val player = PlayerQuery.self()
+        val rift = Queries.newObjectQuery()
+            .id(RIFT_ID)
+            .result()
+            .firstOrNull()
+        if(checkForAgents() != null){
+            spyOnAgent()
+        }
+        if (rift != null) {
+            val noJars = Backpack.count { i: ComponentItem -> i.name.contains(MEMORY_JAR)}
+            rift.interact("Offer-memory")
+            Time.waitUntil { !player.isMoving }
+            Time.waitFor((2800 * noJars).toLong())
+        }
+    }
+
+    private fun checkForCoreFragment(): Npc? { //unused atm, but will be used to check for core fragments
+        return Queries.newNpcQuery()
+            .names("Core memory fragment")
+            .result()
+            .nearest()
+            .orElse(null)
+    }
+
+    private fun captureCoreFragment() { //unused atm, but will be used to capture core fragments
+        val coreFrag = checkForCoreFragment()
+        if (coreFrag != null) {
+            do {
+                coreFrag.interact("Capture")
+                Time.waitFor((3000))
+                Time.waitUntil { !PlayerQuery.self().isMoving }
+            } while (checkForCoreFragment() != null)
+        }
+    }
+
+    private fun checkKnowledgeFragment(): Boolean { //checks for knowledge fragments
+        return Queries.newNpcQuery()
+            .names(KFRAG_NAME)
+            .result()
+            .nearest()
+            .isPresent
+    }
+
+    private fun captureKnowledgeFragment() {  //captures knowledge fragments
+        while (checkKnowledgeFragment() && isRunning) {
+            val coreFrag = Queries.newNpcQuery()
+                .names(KFRAG_NAME)
+                .result()
+                .nearest()
+                .orElse(null)
+
+            coreFrag?.interact("Capture")
+            Time.waitUntil { !PlayerQuery.self().isMoving }
+            Time.waitFor(Rng.i64(250, 627))
+        }
+    }
+
+    private fun checkForAgents(): String? { //checks for secret agents, disabled after weekly limit hit
+        if(!checkForAgentsEnabled) return null
+            val agent = Queries.newNpcQuery()
+                .id(27244)
+                .result()
+                .nearest()
+                .orElse(null)
+            if (agent != null) {
+                agent.interact("Spy-on")
+                Time.waitFor(Rng.i64(2250, 4627))
+                val newAgent = Queries.newNpcQuery()
+                    .id(27244)
+                    .result()
+                    .nearest()
+                    .orElse(null)
+                    attempts++
+                if(newAgent == null){
+                    attempts = 0
+                    return agent.name
+                }
+            }
+            if (attempts >= 3) {
+                checkForAgentsEnabled = false
+                Debug.log("Weekly limit hit, disabling agent checks")
+                return null
+            }
+        return null
+    }
+
+    private fun spyOnAgent() { //returns no. of agents found
+            if (!checkForAgentsEnabled && checkForAgents() != null) return
+            else
+                penguins++
+                Debug.log("Number of penguins found: $penguins")
+    }
+
+    private fun middleNPCs(): String? { //Used to prioritise special memories found in the middle
+        val npcNames = listOf("Juna", "Aagi", "Seren", "Sword of Edicts", "Cres")
+        for (name in npcNames) {
+            val npc = Queries.newNpcQuery()
+                .names(name)
+                .result()
+                .nearest()
+                .orElse(null)
+            if (npc != null) {
+                return npc.name
+            }
+        }
+        return null
+    }
+}
