@@ -23,15 +23,14 @@ class HallofMemories(
 
     private val DEPOT_ID = 111374 //Object ID of the depot
     private val RIFT_ID = 111375 //Object ID of the rift
-    private val KFRAG_NAME = "Knowledge fragment" //Name of the knowledge fragment
     private var checkForAgentsEnabled = true //while true, spies on Penguins
     private var selectedMemory: Npc? = null
     var memories = arrayOf("Lustrous memories", "Brilliant memories", "Radiant memories", "Luminous memories", "Incandescent memories")
     var chosenMemoryIndex: NativeInteger = NativeInteger(0)
-    private var chosenMemory = "" //this is the memory that is currently being used
-    var keepCurrentMethod: NativeBoolean = NativeBoolean(false)
+    var chosenMemory = "" //this is the memory that is currently being used
+    var keepCurrentMethod: NativeBoolean = NativeBoolean(true)
     private var xpPerHour = 0.0
-    private var penguins = 0
+    var penguins = 0
     private var attempts = 0
     private var xpEarned = 0
     private val random: Random = Random()
@@ -41,6 +40,7 @@ class HallofMemories(
         loopDelay = 500
         console.addLineToConsole("My script loaded!")
         sgc = GraphicsContext(this, console)
+        keepCurrentMethod.set(true)
 
         return super.initialize()
     }
@@ -67,7 +67,7 @@ class HallofMemories(
             }
             when {
                     checkForAgents() != null -> spyOnAgent() //checks to see if agent is present (see function)
-                    checkKnowledgeFragment() -> captureKnowledgeFragment()  //checks to see if knowledge fragment is present (see function)
+                    checkKnowledgeFragment() != null -> captureKnowledgeFragment()  //checks to see if knowledge fragment is present (see function)
                     jarSearch.any { item ->
                         item.name?.contains("Memory jar") ?: false } && fullJarCheck -> {  //checks to see if backpack is not full and if there is a memory jar that is not full (see function)
                         fillJars(); startTwoTicking()   //fills jars (see function)
@@ -76,7 +76,7 @@ class HallofMemories(
                         item.name?.equals("Memory jar (full)") == true && !item.name?.equals("Memory Jar (empty)")!!
                     } -> depositJars()
                     jarSearch.any { item ->
-                        item.name?.equals("Memory jar (empty)") == false } -> grabJars()
+                        item.name?.equals("Memory jar (empty)") == false } || Backpack.isEmpty() -> grabJars()
                     else -> { Execution.delay(random.nextInt(500, 1525).toLong())
                     console.addLineToConsole("elsed") }
                 }
@@ -134,12 +134,13 @@ class HallofMemories(
        val player = Client.getLocalPlayer()
        selectedMemory = findSelectedMemory()
         if(player != null) {
-                if (Client.getLocalPlayer()?.isMoving == false) {
+            Execution.delayUntil(5000) {
+                Client.getLocalPlayer()?.isMoving == false
+            }
+            console.addLineToConsole("Fill Jars")
+            if (Client.getLocalPlayer()?.isMoving == false) {
                     Execution.delay(random.nextInt(500, 1225).toLong())
                     selectedMemory?.interact("Harvest")
-                    Execution.delayUntil(3000) {
-                        Client.getLocalPlayer()?.isMoving == false
-                    }
                 }
             }
 
@@ -147,16 +148,18 @@ class HallofMemories(
     }
 
     private fun startTwoTicking() { //Two-ticks chosen memories
+        val memory = selectedMemory
         while (Client.getLocalPlayer()?.animationId != -1) {
                 catchNPCs()
                 if(checkForAgents() != null){
                     spyOnAgent()
                 }
-                else if (checkKnowledgeFragment()){
+                else if (checkKnowledgeFragment() != null){
                 captureKnowledgeFragment()
                 }
                 else {
-                    selectedMemory?.interact("Harvest")
+                    console.addLineToConsole("Two-tick")
+                    memory?.interact("Harvest")
                     Execution.delay(random.nextInt(1200, 1250).toLong())
                 }
             }
@@ -173,7 +176,7 @@ class HallofMemories(
         if (rift != null) {
             rift.interact("Offer-memory")
             console.addLineToConsole("Depositing Jars")
-            Execution.delayUntil(20000) {
+            Execution.delayUntil(60000) {
                 !Backpack.getItems().any { item ->
                     item.name?.contains("jar", ignoreCase = true) ?: false
                 }
@@ -203,18 +206,17 @@ class HallofMemories(
         }
     }
 
-    private fun checkKnowledgeFragment(): Boolean { //checks for knowledge fragments
+    private fun checkKnowledgeFragment(): Npc? { //checks for knowledge fragments
         return NpcQuery.newQuery()
-            .name(KFRAG_NAME)
+            .name("Knowledge fragment")
             .results()
-            .nearest()
-            ?.interact("Capture") ?: false
+            .firstOrNull()
     }
 
     private fun captureKnowledgeFragment() {  //captures knowledge fragments
-        if (checkKnowledgeFragment()) {
+        if (checkKnowledgeFragment() != null) {
             val coreFrag = NpcQuery.newQuery()
-                .name(KFRAG_NAME)
+                .name("Knowledge fragment")
                 .results()
                 .nearest()
 
@@ -232,7 +234,7 @@ class HallofMemories(
             val agent = NpcQuery.newQuery()
                 .name("Agent", String::contains)
                 .results()
-                .nearest()
+                .firstOrNull()
             if (agent != null) {
                 agent.interact("Spy-on")
                 Execution.delay(random.nextInt(2250, 4627).toLong())
@@ -240,7 +242,7 @@ class HallofMemories(
                 val newAgent = NpcQuery.newQuery()
                     .name("Agent", String::contains)
                     .results()
-                    .nearest()
+                    .firstOrNull()
                     attempts++
                 if(newAgent == null){
                     attempts = 0
@@ -268,7 +270,7 @@ class HallofMemories(
             val npc = NpcQuery.newQuery()
                 .name(name)
                 .results()
-                .nearest()
+                .firstOrNull()
             if (npc != null) {
                 return npc.name
             }
