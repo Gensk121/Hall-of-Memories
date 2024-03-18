@@ -30,7 +30,6 @@ tasks.named<Jar>("jar") {
         configurations["includeInJar"].map { zipTree(it) }
     })
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from(configurations["compileClasspath"].filter { it.name.startsWith("kotlin-stdlib") }.map { zipTree(it) })
     finalizedBy(copyJar)
 }
 

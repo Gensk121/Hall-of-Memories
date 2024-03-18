@@ -2,6 +2,7 @@ package com.aggro
 
 import net.botwithus.api.game.hud.inventories.Backpack
 import net.botwithus.internal.scripts.ScriptDefinition
+import net.botwithus.rs3.events.impl.SkillUpdateEvent
 import net.botwithus.rs3.game.Client
 import net.botwithus.rs3.game.queries.builders.characters.NpcQuery
 import net.botwithus.rs3.game.queries.builders.objects.SceneObjectQuery
@@ -10,7 +11,7 @@ import net.botwithus.rs3.script.Execution
 import net.botwithus.rs3.script.LoopingScript
 import net.botwithus.rs3.script.config.ScriptConfig
 import java.util.Random
-import net.botwithus.rs3.game.Travel
+import net.botwithus.rs3.game.movement.Movement
 import net.botwithus.rs3.game.skills.Skills
 import net.botwithus.rs3.imgui.NativeBoolean
 import net.botwithus.rs3.imgui.NativeInteger
@@ -21,6 +22,9 @@ class HallofMemories(
     scriptDefinition: ScriptDefinition
 ) : LoopingScript (name, scriptConfig, scriptDefinition) {
 
+    var xpGained: Int = 0
+    var xpPerHour = 0
+    var startTime = System.currentTimeMillis()
     private val DEPOT_ID = 111374 //Object ID of the depot
     private val RIFT_ID = 111375 //Object ID of the rift
     private var checkForAgentsEnabled = true //while true, spies on Penguins
@@ -29,29 +33,37 @@ class HallofMemories(
     var chosenMemoryIndex: NativeInteger = NativeInteger(0)
     var chosenMemory = "" //this is the memory that is currently being used
     var keepCurrentMethod: NativeBoolean = NativeBoolean(true)
-    private var xpPerHour = 0.0
     var penguins = 0
     private var attempts = 0
-    private var xpEarned = 0
     private val random: Random = Random()
 
     override fun initialize(): Boolean {
-        isActive = false
         loopDelay = 500
-        console.addLineToConsole("My script loaded!")
+        console.addLineToConsole("Aggro Hall of Memories loaded")
         sgc = GraphicsContext(this, console)
         keepCurrentMethod.set(true)
+
+        subscribe(SkillUpdateEvent::class.java) {
+            val xpChange = it.experience - it.oldExperience
+            if (xpChange in -10_000_000..10_000_000) { // Check if the XP change is between -10 million and 10 million
+                xpGained += xpChange
+            }
+        }
 
         return super.initialize()
     }
 
     override fun onLoop() {
-        try { //used to catch errors
+        try {
+            val levels = Skills.DIVINATION.level
+            console.addLineToConsole(levels.toString())
+            updateStatistics()
             chosenMemory = middleNPCs()  //checks to see if memory bud is open, in the middle
                 ?: if (!keepCurrentMethod.get()) {
                     memories[chosenMemoryIndex.get()]
                 } else {
                 val divinationLevel = Skills.DIVINATION.level// Gets current divination level
+                    console.addLineToConsole(divinationLevel.toString())
                     when {
                     divinationLevel in 70..79 -> "Lustrous memories" // If Div Level 70-79, chosen memory = "Lustrous memories"
                     divinationLevel in 80..84 -> "Brilliant memories"
@@ -59,8 +71,9 @@ class HallofMemories(
                     divinationLevel in 90..94 -> "Luminous memories"
                     divinationLevel >= 95 -> "Incandescent memories"
                     else -> ""
-                }
+                    }
             }
+            console.addLineToConsole(chosenMemory)
             val jarSearch = Backpack.getItems()
             val fullJarCheck =  jarSearch.any { item ->
                 item.name?.contains("Memory jar" ) == true && !item.name?.equals("Memory jar (full)")!!
@@ -81,7 +94,7 @@ class HallofMemories(
                     console.addLineToConsole("elsed") }
                 }
         } catch (e: Exception) {
-            console.addLineToConsole(e.message) //logs error to Abyss console
+            console.addLineToConsole(e.message)
         }
 
         return
@@ -114,7 +127,7 @@ class HallofMemories(
                 val coord = Client.getLocalPlayer()?.coordinate
                 if (coord != null) {
                     console.addLineToConsole("running to middle")
-                    Travel.walkTo(coord.x.minus(18), coord.y)
+                    Movement.walkTo(coord.x.minus(18), coord.y, false)
                 }
                 Execution.delay(random.nextInt(1874, 5301).toLong())
             }
@@ -148,22 +161,24 @@ class HallofMemories(
     }
 
     private fun startTwoTicking() { //Two-ticks chosen memories
-        val memory = selectedMemory
-        while (Client.getLocalPlayer()?.animationId != -1) {
-                catchNPCs()
-                if(checkForAgents() != null){
-                    spyOnAgent()
-                }
-                else if (checkKnowledgeFragment() != null){
-                captureKnowledgeFragment()
-                }
-                else {
-                    console.addLineToConsole("Two-tick")
-                    memory?.interact("Harvest")
-                    Execution.delay(random.nextInt(1200, 1250).toLong())
-                }
+        val memory = findSelectedMemory()
+        var player = Client.getLocalPlayer()?.animationId
+
+            while (player != -1) {
+                    catchNPCs()
+                    if(checkForAgents() != null){
+                        spyOnAgent()
+                    } else if (checkKnowledgeFragment() != null){
+                        captureKnowledgeFragment()
+                    } else {
+                        console.addLineToConsole("Two-tick")
+                        memory?.interact("Harvest")
+                        Execution.delay(random.nextInt(1200, 1250).toLong())
+                    }
+                    player = Client.getLocalPlayer()?.animationId
             }
     }
+
 
     private fun depositJars() { //deposits jars into the rift
         val rift = SceneObjectQuery.newQuery()
@@ -316,5 +331,11 @@ class HallofMemories(
             .name(npcName)
             .results()
             .nearest()
+    }
+
+    private fun updateStatistics() {
+        val currentTime: Long = (System.currentTimeMillis() - startTime) / 1000
+
+        xpPerHour = Math.round(3600.0 / currentTime * xpGained).toInt()
     }
 }
